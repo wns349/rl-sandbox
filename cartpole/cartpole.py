@@ -10,21 +10,19 @@ from keras.models import Sequential
 
 
 class DQNAgent(object):
-    def __init__(self, state_size, action_size, is_train):
+    def __init__(self, state_size, action_size, train):
         self.state_size = state_size
         self.action_size = action_size
-        self.is_train = is_train
 
-        self.discount_factor = 0.9
+        self.discount_factor = 0.99
         self.learning_rate = 1e-2
-        self.learning_rate_decay = 1e-2
-        self.epsilon = 0.1
-        self.epsilon_decay = 0.999
-        self.epsilon_min = 0.001
-        self.train_start = 100
+        self.epsilon = 1.0 if train else 0.00
+        self.epsilon_decay = 0.999 if train else 1.0
+        self.epsilon_min = 0.01 if train else self.epsilon
+        self.train_start = 1000
         self.batch_size = 64
 
-        self.memory = deque(maxlen=10000)
+        self.memory = deque(maxlen=2000)
 
         self.model = self.build_model()
         self.target_model = self.build_model()
@@ -32,14 +30,14 @@ class DQNAgent(object):
 
     def build_model(self):
         model = Sequential()
-        model.add(Dense(16,
+        model.add(Dense(24,
                         input_dim=self.state_size,
                         activation="relu"))
-        model.add(Dense(32,
+        model.add(Dense(24,
                         activation="relu"))
         model.add(Dense(self.action_size,
                         activation="linear"))
-        model.compile(loss="mse", optimizer=Adam(lr=self.learning_rate, decay=self.learning_rate_decay))
+        model.compile(loss="mse", optimizer=Adam(lr=self.learning_rate))
         return model
 
     def update_target_model(self):
@@ -54,12 +52,11 @@ class DQNAgent(object):
         self.model.save_weights(path_to_model)
 
     def get_action(self, state):
-        if self.is_train and np.random.rand() <= self.epsilon:  # exploration
+        if np.random.rand() <= self.epsilon:  # exploration
             return random.randrange(self.action_size)
         else:
             q_values = self.model.predict(state)
-            best_qs = np.argwhere(q_values == np.amax(q_values[0])).flatten()
-            return np.random.choice(best_qs)
+            return np.argmax(q_values[0])
 
     def add_sample(self, state, action, reward, next_state, is_done):
         self.memory.append((state, action, reward, next_state, is_done))
@@ -88,7 +85,8 @@ class DQNAgent(object):
             if t:
                 target[i][a] = r
             else:
-                target[i][a] = r + self.discount_factor * (np.max(qhat[i]))
+                target[i][a] = r + self.discount_factor * (np.amax(qhat[i]))  # DQN
+                # target[i][a] = r + self.discount_factor * (qhat[i][np.argmax(target[i])])  # Double DQN
 
         self.model.fit(states, target, batch_size=batch_size, epochs=1, verbose=0)
 
@@ -114,8 +112,8 @@ def run_cartpole(total_episodes=1000,
                  weights_path="./cartpole.h5",
                  render=True,
                  train=True,
-                 train_step_interval=20,
-                 target_update_episode_interval=20):
+                 target_update_episode_interval=20,
+                 stop_average_score=-1):
     env = gym.make('CartPole-v1')
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
@@ -139,20 +137,20 @@ def run_cartpole(total_episodes=1000,
             next_state, reward, done, _ = env.step(action)
             next_state = reshape_state(next_state)
 
-            agent.add_sample(state, action, reward, next_state, done)
+            if train:
+                agent.add_sample(state, action, reward, next_state, done)
+                agent.update_epsilon(episode, step)
             score += reward
             state = next_state
 
-            if train and step % train_step_interval == 0:
-                agent.train_model()
-
         # episode is done
         if train:
+            agent.train_model()
             if episode > 0 and episode % target_update_episode_interval == 0:
                 agent.update_target_model()
-            agent.update_epsilon(episode, step)
             scores.append(score)
             mva_score = mva_score * 0.9 + score * 0.1 if len(scores) > 5 else np.average(scores)
+
         print("Game over: {} / step: {} / score: {} / average_score: {:.5f} / epsilon: {:.5f}".format(episode,
                                                                                                       step,
                                                                                                       score,
@@ -161,15 +159,20 @@ def run_cartpole(total_episodes=1000,
 
         if episode > 0 and episode % save_weights_interval == 0:
             agent.save_model(weights_path)
+        if 0 < stop_average_score <= mva_score:
+            break
+
+    # save again
+    agent.save_model(weights_path)
     plot_scores(scores)
 
     env.close()
 
 
 if __name__ == "__main__":
-    run_cartpole(render=False,
-                 train=True,
+    run_cartpole(render=True,
+                 train=False,
                  total_episodes=5000,
-                 save_weights_interval=5000,
-                 train_step_interval=1,
-                 target_update_episode_interval=1)
+                 save_weights_interval=1000,
+                 target_update_episode_interval=1,
+                 stop_average_score=490)
