@@ -1,0 +1,229 @@
+import gym
+import os
+import cv2
+import random
+import numpy as np
+import tensorflow as tf
+from keras.layers import Conv2D, Flatten, Dense, InputLayer, Lambda
+from keras.optimizers import RMSprop
+from keras import backend as K
+from keras.models import Sequential
+from collections import deque
+
+EPISODES = 10000
+RENDER = True
+WEIGHTS_PATH = "./breakout_ddqn.h5"
+
+
+class AtariDDQNAgent(object):
+    def __init__(self, state_shape, action_size, log_dir="./log"):
+        self.state_shape = state_shape
+        self.action_size = action_size
+
+        # hyper-parameters
+        self.exploration_steps = 1e6
+        self.epsilon = 1.
+        self.epsilon_min = 0.1
+        self.epsilon_decay_step = (self.epsilon - self.epsilon_min) / (self.exploration_steps * 1.)
+        self.memory = deque(maxlen=1000000)
+        self.batch_size = 32
+        self.train_start = 5000
+        self.learning_rate = 0.00025
+        self.discount_factor = 0.99
+
+        # build model
+        self.model = self.build_model(state_shape, action_size)
+        self.target_model = self.build_model(state_shape, action_size)
+        self.optimizer = self.build_optimizer()
+
+        # tf summary for tensorboard
+        self.sess = tf.InteractiveSession()
+        K.set_session(self.sess)
+        self.summary_placeholder, self.summary_update_ops, self.summary_op = self.setup_summary()
+        self.summary_writer = tf.summary.FileWriter(log_dir, self.sess.graph)
+        self.sess.run(tf.global_variables_initializer())
+
+    def preprocess(self, img, new_shape=(84, 84)):
+        new_img = cv2.resize(img, new_shape)
+        new_img = cv2.cvtColor(new_img, cv2.COLOR_RGB2GRAY)
+        new_img.astype(np.uint8)
+        return new_img
+
+    def update_target_model(self):
+        self.target_model.set_weights(self.model.get_weights())
+
+    def load_weights(self, path_to_weights):
+        if os.path.exists(path_to_weights):
+            self.model.load_weights(path_to_weights)
+            self.update_target_model()
+
+    def save_weights(self, path_to_weights):
+        self.model.save_weights(path_to_weights)
+
+    def update_epsilon(self):
+        self.epsilon = max(self.epsilon - self.epsilon_decay_step, self.epsilon_min)
+
+    def get_action(self, state):
+        if np.random.rand() <= self.epsilon:
+            return np.random.randint(self.action_size)
+        else:
+            q_values = self.model.predict(state)
+            return np.argmax(q_values[0])
+
+    def remember(self, state, action, reward, next_state, is_done):
+        self.memory.append((state, action, reward, next_state, is_done))
+
+    def train_model(self):
+        if len(self.memory) < self.train_start:
+            return  # not enough experiences yet
+        self.update_epsilon()
+
+        batch_size = min(self.batch_size, len(self.memory))
+        mini_batch = random.sample(self.memory, batch_size)
+
+        states = []
+        next_states = []
+        actions = []
+        for s, a, r, n, t in mini_batch:  # state, action, reward, next state, terminated
+            states.append(s)
+            next_states.append(n)
+            actions.append(a)
+
+        states = np.array(states)
+        next_states = np.array(next_states)
+        actions = np.array(actions)
+        targets = np.zeros((batch_size,))
+
+        qs = self.model.predict(next_states)
+        target_qs = self.target_model.predict(next_states)
+
+        for i, b in enumerate(mini_batch):
+            s, a, r, n, t = b
+            if t:
+                targets[i] = r
+            else:
+                targets[i] = r + self.discount_factor * target_qs[i][np.argmax(qs[i])]
+
+        loss = self.optimizer([states, actions, targets])
+
+    def build_model(self, input_shape, output_shape):
+        model = Sequential()
+        model.add(InputLayer(input_shape))
+        model.add(Lambda(lambda x: x / 255.0))
+        model.add(Conv2D(32, 8, strides=(4, 4), activation="relu"))
+        model.add(Conv2D(64, 4, strides=(2, 2), activation="relu"))
+        model.add(Conv2D(64, 3, strides=(1, 1), activation="relu"))
+        model.add(Flatten())
+        model.add(Dense(512, activation="relu"))
+        model.add(Dense(output_shape, activation="linear"))
+        model.summary()
+        return model
+
+    def build_optimizer(self):
+        action = K.placeholder(shape=(None,), dtype="int32")
+        y = K.placeholder(shape=(None,), dtype="float32")
+        out = self.model.output
+
+        # huber loss
+        one_hot = K.one_hot(action, self.action_size)
+        q_value = K.sum(out * one_hot, axis=1)
+        error = y - q_value
+        condition = K.abs(error) < 1.0
+        squared_loss = 0.5 * K.square(error)
+        linear_loss = K.abs(error) - 0.5
+        clipped_error = tf.where(condition, squared_loss, linear_loss)
+        loss = K.mean(clipped_error)
+
+        optimizer = RMSprop(lr=self.learning_rate, epsilon=0.01)
+        updates = optimizer.get_updates(self.model.trainable_weights, [], loss)
+        train_op = K.function([self.model.input, action, y], [loss], updates=updates)
+        return train_op
+
+    def setup_summary(self):
+        # for tensorboard
+        # TODO
+        episode_duration = tf.Variable(0.)
+
+        tf.summary.scalar("Duration/Episode", episode_duration)
+
+        vars = [episode_duration]
+        placeholders = [tf.placeholder(tf.float32) for _ in range(len(vars))]
+        update_ops = [vars[i].assign(placeholders[i]) for i in range(len(vars))]
+        summary_op = tf.summary.merge_all()
+        return placeholders, update_ops, summary_op
+
+
+def main():
+    env = gym.make("BreakoutDeterministic-v4")
+    frame = env.reset()
+    print(env.observation_space)
+
+    agent = AtariDDQNAgent(state_shape=(84, 84, 4), action_size=3)
+    agent.load_weights(WEIGHTS_PATH)
+
+    global_step = 0
+    for episode in range(1, EPISODES + 1):
+        env.reset()
+
+        frame, _, _, info = env.step(1)
+
+        # DeepMind's idea: do nothing for a while to avoid sub-optimal?
+        for _ in range(random.randint(1, 30)):
+            frame, _, _, info = env.step(1)  # 1 is noop
+
+        frame = agent.preprocess(frame)  # [h, w]
+        state = np.stack((frame, frame, frame, frame), axis=-1)  # [h, w, 4]
+
+        lives = info["ale.lives"]
+        step = 0
+        score = 0
+        done = False
+        while not done:
+            if RENDER:
+                env.render()
+            global_step += 1
+            step += 1
+
+            action = agent.get_action(state)
+            agent_action = action + 1  # since 0 is reset button
+
+            frame, reward, done, info = env.step(agent_action)
+            frame = agent.preprocess(frame)  # [h, w]
+            frame = np.expand_dims(frame, axis=-1)  # [h, w, 1]
+            next_state = np.append(frame, state[..., :3], axis=-1)  # [h, w, 4]
+
+            dead = lives != info["ale.lives"]  # agent is dead, but episode is not over
+            lives = info["ale.lives"]
+
+            reward = np.clip(reward, -1., 1.)
+            score += reward
+
+            agent.remember(state, action, reward, next_state, dead)
+            agent.train_model()
+
+            state = next_state
+        # done
+        if global_step > agent.train_start:
+            summary_vals = [step]
+            for i in range(len(summary_vals)):
+                agent.sess.run(agent.summary_update_ops[i], feed_dict={
+                    agent.summary_placeholder[i]: float(summary_vals[i])
+                })
+            summary_str = agent.sess.run(agent.summary_op)
+            agent.summary_writer.add_summary(summary_str, episode)
+
+        print("episode: ", episode,
+              " score: ", score,
+              " memory length: ", len(agent.memory),
+              " epsilon: ", agent.epsilon,
+              " global step: ", global_step)
+
+        if episode % 1000 == 0:
+            agent.save_weights(WEIGHTS_PATH)
+
+    env.close()
+    print("Bye")
+
+
+if __name__ == "__main__":
+    main()

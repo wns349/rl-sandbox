@@ -2,7 +2,7 @@
 
 Reinforcement learning sandbox!
 
-- DQN: Solve OpenAI Gym problems using DQN!
+- Solve OpenAI Gym problems!
 
 ### References
 
