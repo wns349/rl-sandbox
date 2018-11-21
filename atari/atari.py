@@ -10,11 +10,6 @@ from keras import backend as K
 from keras.models import Sequential
 from collections import deque
 
-EPISODES = 10000
-RENDER = True
-WEIGHTS_PATH = "./breakout_ddqn.h5"
-UPDATE_TARGET_RATE = 10000
-
 
 class AtariDDQNAgent(object):
     def __init__(self, state_shape, action_size, log_dir="./log"):
@@ -156,23 +151,28 @@ class AtariDDQNAgent(object):
         return placeholders, update_ops, summary_op
 
 
-def main():
-    env = gym.make("BreakoutDeterministic-v4")
+def main(env_name="BreakoutDeterministic-v4",
+         weights_path="ddqn.h5",
+         episodes=10000,
+         render=True,
+         update_target_rate=10000):
+    env = gym.make(env_name)
     frame = env.reset()
     print(env.observation_space)
+    print(env.action_space.n)
 
-    agent = AtariDDQNAgent(state_shape=(84, 84, 4), action_size=3)
-    agent.load_weights(WEIGHTS_PATH)
+    agent = AtariDDQNAgent(state_shape=(84, 84, 4), action_size=env.action_space.n)
+    agent.load_weights(weights_path)
 
     global_step = 0
-    for episode in range(1, EPISODES + 1):
+    for episode in range(1, episodes + 1):
         env.reset()
 
         frame, _, _, info = env.step(1)
 
         # DeepMind's idea: do nothing for a while to avoid sub-optimal?
         for _ in range(random.randint(1, 30)):
-            frame, _, _, info = env.step(1)  # 1 is noop
+            frame, _, _, info = env.step(env.action_space.sample())
 
         frame = agent.preprocess(frame)  # [h, w]
         state = np.stack((frame, frame, frame, frame), axis=-1)  # [h, w, 4]
@@ -183,15 +183,14 @@ def main():
         score = 0
         done = False
         while not done:
-            if RENDER:
+            if render:
                 env.render()
             global_step += 1
             step += 1
 
             action = agent.get_action(state)
-            agent_action = action + 1  # since 0 is reset button
 
-            frame, reward, done, info = env.step(agent_action)
+            frame, reward, done, info = env.step(action)
             frame = agent.preprocess(frame)  # [h, w]
             frame = np.expand_dims(frame, axis=-1)  # [h, w, 1]
             next_state = np.append(frame, state[..., :3], axis=-1)  # [h, w, 4]
@@ -205,7 +204,7 @@ def main():
 
             agent.remember(state, action, reward, next_state, dead)
             agent.train_model()
-            if global_step % UPDATE_TARGET_RATE == 0:
+            if global_step % update_target_rate == 0:
                 agent.update_target_model()
 
             state = next_state
@@ -227,11 +226,13 @@ def main():
               " global step: ", global_step)
 
         if episode % 1000 == 0:
-            agent.save_weights(WEIGHTS_PATH)
+            agent.save_weights(weights_path)
 
     env.close()
     print("Bye")
 
 
 if __name__ == "__main__":
-    main()
+    main(env_name="MsPacmanDeterministic-v4",
+         weights_path="pacman.h5",
+         render=True)
