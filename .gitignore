@@ -3,4 +3,4 @@
 *.swp
 .idea/*
 .DS_Store
-log/*
+**/log/*

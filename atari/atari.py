@@ -13,6 +13,7 @@ from collections import deque
 EPISODES = 10000
 RENDER = True
 WEIGHTS_PATH = "./breakout_ddqn.h5"
+UPDATE_TARGET_RATE = 10000
 
 
 class AtariDDQNAgent(object):
@@ -67,7 +68,7 @@ class AtariDDQNAgent(object):
         if np.random.rand() <= self.epsilon:
             return np.random.randint(self.action_size)
         else:
-            q_values = self.model.predict(state)
+            q_values = self.model.predict(np.expand_dims(state, axis=0))
             return np.argmax(q_values[0])
 
     def remember(self, state, action, reward, next_state, is_done):
@@ -143,12 +144,14 @@ class AtariDDQNAgent(object):
         # for tensorboard
         # TODO
         episode_duration = tf.Variable(0.)
+        episode_avg_max_q = tf.Variable(0.)
 
         tf.summary.scalar("Duration/Episode", episode_duration)
+        tf.summary.scalar("Average Max Q/Episode", episode_avg_max_q)
 
-        vars = [episode_duration]
-        placeholders = [tf.placeholder(tf.float32) for _ in range(len(vars))]
-        update_ops = [vars[i].assign(placeholders[i]) for i in range(len(vars))]
+        variables = [episode_duration, episode_avg_max_q]
+        placeholders = [tf.placeholder(tf.float32) for _ in range(len(variables))]
+        update_ops = [variables[i].assign(placeholders[i]) for i in range(len(variables))]
         summary_op = tf.summary.merge_all()
         return placeholders, update_ops, summary_op
 
@@ -175,6 +178,7 @@ def main():
         state = np.stack((frame, frame, frame, frame), axis=-1)  # [h, w, 4]
 
         lives = info["ale.lives"]
+        max_qs = 0
         step = 0
         score = 0
         done = False
@@ -194,17 +198,20 @@ def main():
 
             dead = lives != info["ale.lives"]  # agent is dead, but episode is not over
             lives = info["ale.lives"]
+            max_qs += np.amax(agent.model.predict(np.expand_dims(state, axis=0))[0])
 
             reward = np.clip(reward, -1., 1.)
             score += reward
 
             agent.remember(state, action, reward, next_state, dead)
             agent.train_model()
+            if global_step % UPDATE_TARGET_RATE == 0:
+                agent.update_target_model()
 
             state = next_state
         # done
         if global_step > agent.train_start:
-            summary_vals = [step]
+            summary_vals = [step, max_qs / float(step)]
             for i in range(len(summary_vals)):
                 agent.sess.run(agent.summary_update_ops[i], feed_dict={
                     agent.summary_placeholder[i]: float(summary_vals[i])
@@ -214,7 +221,8 @@ def main():
 
         print("episode: ", episode,
               " score: ", score,
-              " memory length: ", len(agent.memory),
+              " avg max q: ", max_qs / float(step),
+              " memory: ", len(agent.memory),
               " epsilon: ", agent.epsilon,
               " global step: ", global_step)
 
