@@ -12,20 +12,21 @@ from collections import deque
 
 
 class AtariDDQNAgent(object):
-    def __init__(self, state_shape, action_size, log_dir="./log"):
+    def __init__(self, state_shape, action_size, log_dir="./log", is_test=False):
         self.state_shape = state_shape
         self.action_size = action_size
 
         # hyper-parameters
         self.exploration_steps = 1e6
-        self.epsilon = 1.
-        self.epsilon_min = 0.1
+        self.epsilon = 1. if not is_test else 0.001
+        self.epsilon_min = 0.1 if not is_test else 0.001
         self.epsilon_decay_step = (self.epsilon - self.epsilon_min) / (self.exploration_steps * 1.)
         self.memory = deque(maxlen=1000000)
         self.batch_size = 32
         self.train_start = 5000
         self.learning_rate = 0.00025
         self.discount_factor = 0.99
+        self.is_test = is_test
 
         # build model
         self.model = self.build_model(state_shape, action_size)
@@ -70,7 +71,7 @@ class AtariDDQNAgent(object):
         self.memory.append((state, action, reward, next_state, is_done))
 
     def train_model(self):
-        if len(self.memory) < self.train_start:
+        if len(self.memory) < self.train_start or self.is_test:
             return  # not enough experiences yet
         self.update_epsilon()
 
@@ -155,13 +156,15 @@ def main(env_name="BreakoutDeterministic-v4",
          weights_path="ddqn.h5",
          episodes=10000,
          render=True,
-         update_target_rate=10000):
+         update_target_rate=10000,
+         test=False,
+         log_dir="./log"):
     env = gym.make(env_name)
     frame = env.reset()
     print(env.observation_space)
     print(env.action_space.n)
 
-    agent = AtariDDQNAgent(state_shape=(84, 84, 4), action_size=env.action_space.n)
+    agent = AtariDDQNAgent(state_shape=(84, 84, 4), action_size=env.action_space.n, is_test=test, log_dir=log_dir)
     agent.load_weights(weights_path)
 
     global_step = 0
@@ -233,6 +236,21 @@ def main(env_name="BreakoutDeterministic-v4",
 
 
 if __name__ == "__main__":
-    main(env_name="MsPacmanDeterministic-v4",
-         weights_path="pacman.h5",
-         render=True)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env_name", dest="env_name", default="MsPacmanDeterministic-v4", type=str)
+    parser.add_argument("--weights_path", dest="weights_path", default="pacman.h5", type=str)
+    parser.add_argument("--render", dest="render", action="store_true", default=False)
+    parser.add_argument("--episodes", dest="episodes", default=10000, type=int)
+    parser.add_argument("--target_rate", dest="target_rate", default=5000, type=int)
+    parser.add_argument("--test", dest="test", action="store_true", default=False)
+    parser.add_argument("--log_dir", dest="log_dir", default="./log", type=str)
+    args = parser.parse_args()
+    main(env_name=args.env_name,
+         weights_path=args.weights_path,
+         episodes=args.episodes,
+         update_target_rate=args.target_rate,
+         render=args.render,
+         test=args.test,
+         log_dir=args.log_dir)
