@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from collections import deque
 from keras.layers import Dense
-from keras.optimizers import Adam
+from keras.optimizers import RMSprop
 from keras.models import Sequential
 
 
@@ -15,14 +15,14 @@ class DQNAgent(object):
         self.action_size = action_size
 
         self.discount_factor = 0.99
-        self.learning_rate = 1e-2
-        self.epsilon = 1.0 if train else 0.00
-        self.epsilon_decay = 0.999 if train else 1.0
-        self.epsilon_min = 0.01 if train else self.epsilon
-        self.train_start = 1000
-        self.batch_size = 64
+        self.learning_rate = 0.001
+        self.epsilon = 1.0 if train else 0.001
+        self.epsilon_decay = 0.9999 if train else 1.0
+        self.epsilon_min = 0.001 if train else self.epsilon
+        self.train_start = 500
+        self.batch_size = 32
 
-        self.memory = deque(maxlen=2000)
+        self.memory = deque(maxlen=1000000)
 
         self.model = self.build_model()
         self.target_model = self.build_model()
@@ -33,11 +33,11 @@ class DQNAgent(object):
         model.add(Dense(24,
                         input_dim=self.state_size,
                         activation="relu"))
-        model.add(Dense(24,
+        model.add(Dense(48,
                         activation="relu"))
         model.add(Dense(self.action_size,
                         activation="linear"))
-        model.compile(loss="mse", optimizer=Adam(lr=self.learning_rate))
+        model.compile(loss="mse", optimizer=RMSprop(lr=self.learning_rate))
         return model
 
     def update_target_model(self):
@@ -86,7 +86,6 @@ class DQNAgent(object):
                 target[i][a] = r
             else:
                 target[i][a] = r + self.discount_factor * (np.amax(qhat[i]))  # DQN
-                # target[i][a] = r + self.discount_factor * (qhat[i][np.argmax(target[i])])  # Double DQN
 
         self.model.fit(states, target, batch_size=batch_size, epochs=1, verbose=0)
 
@@ -103,13 +102,13 @@ def plot_scores(scores):
     plt.ylabel("Scores")
     plt.xlabel("Episodes")
     plt.plot()
-    plt.savefig("./cartpole.png")
+    plt.savefig("./cartpole_dqn.png")
     plt.show()
 
 
 def run_cartpole(total_episodes=1000,
                  save_weights_interval=50,
-                 weights_path="./cartpole.h5",
+                 weights_path="./cartpole_dqn.h5",
                  render=True,
                  train=True,
                  target_update_episode_interval=20,
@@ -165,14 +164,15 @@ def run_cartpole(total_episodes=1000,
     # save again
     agent.save_model(weights_path)
     plot_scores(scores)
+    print("Average score: {}".format(np.mean(scores)))
 
     env.close()
 
 
 if __name__ == "__main__":
-    run_cartpole(render=True,
-                 train=False,
+    run_cartpole(render=False,
+                 train=True,
                  total_episodes=5000,
                  save_weights_interval=1000,
-                 target_update_episode_interval=1,
-                 stop_average_score=490)
+                 target_update_episode_interval=100,
+                 stop_average_score=-1)
