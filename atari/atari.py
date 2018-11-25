@@ -158,7 +158,8 @@ def main(env_name="BreakoutDeterministic-v4",
          render=True,
          update_target_rate=10000,
          test=False,
-         log_dir="./log"):
+         log_dir="./log",
+         save_weights_episode=1000):
     env = gym.make(env_name)
     frame = env.reset()
     print(env.observation_space)
@@ -228,7 +229,7 @@ def main(env_name="BreakoutDeterministic-v4",
               " epsilon: ", agent.epsilon,
               " global step: ", global_step)
 
-        if episode % 1000 == 0:
+        if save_weights_episode > 0 and episode % save_weights_episode == 0:
             agent.save_weights(weights_path)
 
     env.close()
@@ -246,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_rate", dest="target_rate", default=5000, type=int)
     parser.add_argument("--test", dest="test", action="store_true", default=False)
     parser.add_argument("--log_dir", dest="log_dir", default="./log", type=str)
+    parser.add_argument("--save_weights_episode", dest="save_weights_episode", default=1000, type=int)
     args = parser.parse_args()
     main(env_name=args.env_name,
          weights_path=args.weights_path,
@@ -253,4 +255,5 @@ if __name__ == "__main__":
          update_target_rate=args.target_rate,
          render=args.render,
          test=args.test,
-         log_dir=args.log_dir)
+         log_dir=args.log_dir,
+         save_weights_episode=args.save_weights_episode)
